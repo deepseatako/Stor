@@ -1,0 +1,1 @@
+python srtor_googletrans.py -p "D:\course"

@@ -1,0 +1,1 @@
+python srtor_whisper.py -p "D:\course"
