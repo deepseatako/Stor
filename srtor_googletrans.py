@@ -1,74 +1,97 @@
-'''
-translate all file under the folder.
-'''
 import os
 import argparse
-import pysrt
+import asyncio
+import pysubs2
 from googletrans import Translator
-from tqdm import tqdm
-from httpcore._exceptions import TimeoutException, ConnectError
 import srtor_lib as lib
+from colorama import init, Fore
+
+BATCH_SIZE = 1000  # Set the batch size for translation
+MAX_CONCURRENT_FILES = 10  # Maximum number of files to process concurrently
 
 
-class _Translator:
-    def _translate_en2cn(self, en_txt: str):
-        translator = Translator()
-        while True:
-            try:
-                cn_txt = translator.translate(
-                    en_txt, src='en', dest='zh-cn').text
-            except IndexError:
-                en_txt = en_txt.replace('.', '. ')
-                cn_txt = translator.translate(
-                    en_txt, src='en', dest='zh-cn').text
-                cn_txt = cn_txt.replace('。', '.')
-            except (TimeoutException, ConnectError):
-                self._pbar.write('error. try to translate again.')
-                continue
-            break
-        return cn_txt
-
-    def translate(self):
-        '''
-        output str file.
-        '''
-        subs = pysrt.open(self._file_path)
-        self._pbar = tqdm(total=len(subs), ncols=0)
-        srt_file = ''
-        for sub in subs:
-            text_en = sub.text
-            text_cn = self._translate_en2cn(text_en)
-            sub.text = f'{text_cn}\n{text_en}'
-            srt_file += f'{str(sub)}\n'
-            self._pbar.update(1)
-        self._pbar.close()
-        with open(self._output_path, "w", encoding="utf-8") as wf:
-            wf.write(srt_file)
-
-    def __init__(self, file_path: str, output_path: str):
-        self._pbar = None
-        self._file_path = file_path
-        self._output_path = output_path
+async def translate_bulk(texts):
+    """
+    Asynchronously translates a list of texts.
+    """
+    async with Translator() as translator:
+        tasks = [translator.translate(text, dest='zh-cn') for text in texts]
+        results = await asyncio.gather(*tasks)
+        return [result.text for result in results]
 
 
-def _translate_all(folder_path):
+async def translate_en2cn(texts):
+    """
+    Translates multiple English texts into Chinese using async API.
+    """
+    error_times = 0
+    while True:
+        try:
+            cn_texts = await translate_bulk(texts)
+        except Exception as e:  # pylint: disable=W0718
+            error_times += 1
+            print(f'Error: {e}')
+            print('Retrying translation...')
+            continue
+        break
+    return cn_texts
+
+
+async def translate(file_path, output_path):
+    """
+    Loads subtitles, translates them in batches asynchronously,
+    and saves the translated subtitles.
+    """
+    subs = pysubs2.load(file_path)
+
+    texts_en = [sub.text for sub in subs]
+    translated_texts = []
+
+    for i in range(0, len(texts_en), BATCH_SIZE):
+        batch = texts_en[i: i + BATCH_SIZE]
+        translated_batch = await translate_en2cn(batch)
+        translated_texts.extend(translated_batch)
+
+    for sub, text_cn in zip(subs, translated_texts):
+        sub.text = f'{text_cn}\n{sub.text}'
+
+    subs.save(output_path)
+
+
+async def translate_file(file_path, output_path, semaphore):
+    """
+    Translates a single file with concurrency control.
+    """
+    async with semaphore:
+        print(f'Start translating "{file_path}".')
+        await translate(file_path=file_path, output_path=output_path)
+        print(f'{Fore.GREEN}Done translating "{file_path}".')
+
+
+async def translate_all(folder_path):
+    """
+    Iterates through all files in the folder and translates subtitles concurrently.
+    """
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_FILES)
+    tasks = []
+
     for root, _, files in os.walk(folder_path):
         all_files = files
         for file_name in files:
             is_file, file_path, output_path = lib.get_file_info(
-                files=all_files, file_name=file_name, root=root,
-                sufs=lib.TRANS_SUFS)
+                files=all_files, file_name=file_name, root=root, sufs=lib.TRANS_SUFS
+            )
             if not is_file:
                 continue
-            print(f'start translating "{file_path}".')
-            _Translator(file_path=file_path,
-                        output_path=output_path).translate()
-            all_files.append(os.path.basename(output_path))
-            print('done.')
 
+            tasks.append(translate_file(file_path, output_path, semaphore))
+
+    await asyncio.gather(*tasks)
 
 if __name__ == '__main__':
+    init(autoreset=True)
     parser = argparse.ArgumentParser()
     parser.add_argument('-p', '--folder_path', type=str, required=True)
     args = parser.parse_args()
-    _translate_all(args.folder_path)
+
+    asyncio.run(translate_all(args.folder_path))

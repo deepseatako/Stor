@@ -1,0 +1,6 @@
+pysrt
+googletrans
+tqdm
+whisper
+argparse
+asyncio

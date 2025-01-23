@@ -58,6 +58,13 @@ python srtor_googletrans.py -p <folder_path>
 
 - `<folder_path>`: Path to the folder containing `.srt` subtitle files.
 
+## Updates
+
+### Version 1.1.0
+
+- **File Modified: srtor_googletrans.py**:
+  - Tasks are now processed asynchronously, reducing wait times for translation requests.
+
 ## Notes
 
 - The speech recognition model used is `base` from OpenAI Whisper.
